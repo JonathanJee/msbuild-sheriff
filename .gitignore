@@ -1,0 +1,7 @@
+node_modules/
+.test-tmp/
+coverage/
+*.sarif
+*.log
+.DS_Store
+Thumbs.db

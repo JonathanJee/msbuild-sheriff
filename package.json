@@ -1,0 +1,43 @@
+{
+  "name": "msbuild-sheriff",
+  "version": "0.1.0",
+  "description": "Zero-build health checks for Visual C++ and MSBuild solutions.",
+  "type": "module",
+  "bin": {
+    "msbuild-sheriff": "src/cli.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node tests/cli.test.js",
+    "check": "node --check src/index.js && node --check src/cli.js && node tests/cli.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "msbuild",
+    "visual-cpp",
+    "vcxproj",
+    "sln",
+    "linter",
+    "sarif",
+    "ci"
+  ],
+  "author": "JonathanJee",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JonathanJee/msbuild-sheriff.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JonathanJee/msbuild-sheriff/issues"
+  },
+  "homepage": "https://github.com/JonathanJee/msbuild-sheriff#readme"
+}
