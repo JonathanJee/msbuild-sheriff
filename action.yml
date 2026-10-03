@@ -1,0 +1,18 @@
+name: msbuild-sheriff
+description: Check Visual C++ and MSBuild project metadata without running MSBuild
+inputs:
+  path:
+    description: Solution, project, or directory to scan, relative to the checked-out workspace
+    required: false
+    default: .
+  format:
+    description: Output format (text, json, or sarif)
+    required: false
+    default: text
+  severity:
+    description: Minimum reported severity (info, warning, or error)
+    required: false
+    default: info
+runs:
+  using: node24
+  main: src/action.js

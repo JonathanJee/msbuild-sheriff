@@ -1,6 +1,6 @@
 {
   "name": "msbuild-sheriff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Zero-build health checks for Visual C++ and MSBuild solutions.",
   "type": "module",
   "bin": {
@@ -15,8 +15,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node tests/cli.test.js",
-    "check": "node --check src/index.js && node --check src/cli.js && node tests/cli.test.js"
+    "test": "node --test tests/cli.test.js tests/action.test.js",
+    "check": "node --check src/index.js && node --check src/cli.js && node --check src/action.js && npm test"
   },
   "engines": {
     "node": ">=20"

@@ -24,6 +24,26 @@ After the package is published:
 npx msbuild-sheriff scan path/to/Legacy.sln
 ```
 
+## GitHub Action
+
+The Action works directly from this repository; no npm publication or project build is required. Check out the repository being scanned first, then pass a `.sln`, `.vcxproj`, or directory path relative to that checkout:
+
+```yaml
+jobs:
+  msbuild-metadata:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: JonathanJee/msbuild-sheriff@v0.2.0
+        with:
+          path: path/to/Legacy.sln
+          severity: warning
+```
+
+`format` may be `text` (default), `json`, or `sarif`. The Action prints results to the job log and fails when diagnostics at the selected severity are found. JSON and SARIF in the Action log are surrounded by GitHub safety markers, so the entire log is not a parseable result file; use the CLI when a file is needed. The Action validates that the requested path stays within `GITHUB_WORKSPACE`, including through directory links, and never evaluates MSBuild projects. This release does not create pull-request annotations or write a SARIF artifact.
+
 Scan a project or every supported file below a directory:
 
 ```sh
@@ -56,16 +76,10 @@ The default text output is designed for local use and CI logs:
 src/app.vcxproj:42: error MSB005: ClCompile file does not exist: src/missing.cpp
 ```
 
-JSON output is intended for custom automation. SARIF 2.1.0 output can be uploaded to GitHub code scanning:
+JSON output is intended for custom automation. SARIF 2.1.0 output can be generated from a source checkout for later upload to GitHub code scanning:
 
-```yaml
-- name: Scan MSBuild metadata
-  run: npx --yes msbuild-sheriff scan Legacy.sln --format sarif > msbuild-sheriff.sarif
-  continue-on-error: true
-
-- uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: msbuild-sheriff.sarif
+```sh
+node src/cli.js scan Legacy.sln --format sarif > msbuild-sheriff.sarif
 ```
 
 ## Safety model
@@ -92,7 +106,7 @@ Visual C++ builds often require a large Windows image, a specific toolset, SDKs,
 ## Roadmap
 
 - Baselines and explicit suppressions for gradual adoption
-- A reusable GitHub Action with pull-request annotations
+- Pull-request annotations and SARIF artifact output for the GitHub Action
 - More `.sln` variants and solution-folder awareness
 - Optional Windows adapter for full MSBuild evaluation
 - Changed-project mode for large monorepos

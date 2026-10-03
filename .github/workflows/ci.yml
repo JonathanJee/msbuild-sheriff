@@ -23,3 +23,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - name: Smoke test the GitHub Action
+        uses: ./
+        with:
+          path: .github/fixtures/healthy.vcxproj
