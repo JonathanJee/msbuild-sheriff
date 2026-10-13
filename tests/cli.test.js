@@ -87,15 +87,53 @@ test('healthy solution, project, and directory scans produce no diagnostics', as
   }
 });
 
-test('MSB001 reports missing and cross-project duplicate ProjectGuid values', async (t) => {
+test('MSB001 reports missing GUIDs and duplicate members of one solution', async (t) => {
   const workspace = makeWorkspace(t);
   workspace.write('main.cpp');
   workspace.write('MissingGuid.vcxproj', vcxproj({ guid: null }));
   workspace.write('First.vcxproj', vcxproj());
   workspace.write('Second.vcxproj', vcxproj());
+  workspace.write('Shared.sln', `Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "First", "First.vcxproj", "{${GUID_APP}}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "Second", "Second.vcxproj", "{${GUID_APP}}"
+EndProject
+`);
 
   const result = await scan(workspace.directory);
-  assert.ok(result.diagnostics.filter((item) => item.ruleId === 'MSB001').length >= 3);
+  assert.equal(result.diagnostics.filter((item) => item.ruleId === 'MSB001').length, 3);
+});
+
+test('MSB001 permits reused GUIDs in separate solutions and standalone projects', async (t) => {
+  const workspace = makeWorkspace(t);
+  workspace.write('main.cpp');
+  workspace.write('First.vcxproj', vcxproj());
+  workspace.write('Second.vcxproj', vcxproj());
+  workspace.write('First.sln', solution().replaceAll('App', 'First'));
+  workspace.write('Second.sln', solution().replaceAll('App', 'Second'));
+  assert.equal((await scan(workspace.directory)).diagnostics.some((item) => item.ruleId === 'MSB001'), false);
+
+  const standalone = makeWorkspace(t);
+  standalone.write('main.cpp');
+  standalone.write('First.vcxproj', vcxproj());
+  standalone.write('Second.vcxproj', vcxproj());
+  assert.equal((await scan(standalone.directory)).diagnostics.some((item) => item.ruleId === 'MSB001'), false);
+});
+
+test('MSB001 catches duplicate project GUIDs within one solution even when entry GUIDs differ', async (t) => {
+  const workspace = makeWorkspace(t);
+  workspace.write('main.cpp');
+  workspace.write('First.vcxproj', vcxproj());
+  workspace.write('Second.vcxproj', vcxproj());
+  const sln = workspace.write('Shared.sln', `Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "First", "First.vcxproj", "{${GUID_APP}}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "Second", "Second.vcxproj", "{${GUID_LIB}}"
+EndProject
+`);
+  const result = await scan(sln);
+  assert.equal(result.diagnostics.filter((item) => item.ruleId === 'MSB001').length, 2);
+  assert.ok(diagnosticIds(result).has('MSB002'));
 });
 
 test('MSB002 reports missing targets, GUID drift, and solution membership', async (t) => {
@@ -123,6 +161,51 @@ test('MSB003 reports a solution mapping absent from the project', async (t) => {
   workspace.write('main.cpp');
   workspace.write('App.vcxproj', vcxproj());
   const sln = workspace.write('App.sln', solution({ mapping: 'Release|Win32' }));
+  assert.ok(diagnosticIds(await scan(sln)).has('MSB003'));
+});
+
+test('MSB003 reads local imported configurations without evaluating MSBuild', async (t) => {
+  const workspace = makeWorkspace(t);
+  workspace.write('build/Configurations.props', '<Project><ItemGroup Label="ProjectConfigurations"><ProjectConfiguration Include="Debug|x64" /></ItemGroup></Project>');
+  workspace.write('App.vcxproj', `<Project><PropertyGroup><ProjectGuid>{${GUID_APP}}</ProjectGuid></PropertyGroup><Import Project="$(SolutionDir)\\build\\Configurations.props" /></Project>`);
+  const sln = workspace.write('App.sln', solution());
+  assert.equal((await scan(sln)).diagnostics.some((item) => item.ruleId === 'MSB003'), false);
+  workspace.write('App.sln', solution({ mapping: 'Release|x64' }));
+  assert.ok(diagnosticIds(await scan(sln)).has('MSB003'));
+});
+
+test('MSB003 does not guess absent configurations through unresolved or conditional imports', async (t) => {
+  const workspace = makeWorkspace(t);
+  workspace.write('main.cpp');
+  workspace.write('App.vcxproj', vcxproj({ imports: '<Import Project="$(UnknownRoot)\\Configurations.props" />' }));
+  const sln = workspace.write('App.sln', solution({ mapping: 'Release|x64' }));
+  assert.equal((await scan(sln)).diagnostics.some((item) => item.ruleId === 'MSB003'), false);
+  workspace.write('App.vcxproj', vcxproj({ imports: '<Import Project="Configurations.props" Condition="true" />' }));
+  assert.equal((await scan(sln)).diagnostics.some((item) => item.ruleId === 'MSB003'), false);
+});
+
+test('MSB003 treats conditional configurations in imported props as incomplete evidence', async (t) => {
+  const workspace = makeWorkspace(t);
+  workspace.write('build/Configurations.props', `<Project><ItemGroup Condition="'$(Custom)' == 'enabled'"><ProjectConfiguration Include="Debug|x64" /></ItemGroup></Project>`);
+  workspace.write('App.vcxproj', `<Project><PropertyGroup><ProjectGuid>{${GUID_APP}}</ProjectGuid></PropertyGroup><Import Project="$(SolutionDir)\\build\\Configurations.props" /></Project>`);
+  const sln = workspace.write('App.sln', solution({ mapping: 'Release|x64' }));
+  assert.equal((await scan(sln)).diagnostics.some((item) => item.ruleId === 'MSB003'), false);
+});
+
+test('MSB003 distinguishes unsupported solution members from stale GUIDs', async (t) => {
+  const workspace = makeWorkspace(t);
+  const source = `Microsoft Visual Studio Solution File, Format Version 10.00
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Legacy", "Legacy.vcproj", "{${GUID_APP}}"
+EndProject
+Global
+  GlobalSection(ProjectConfigurationPlatforms) = postSolution
+    {${GUID_APP}}.Debug|Win32.ActiveCfg = Debug|Win32
+  EndGlobalSection
+EndGlobal
+`;
+  const sln = workspace.write('Legacy.sln', source);
+  assert.equal((await scan(sln)).diagnostics.some((item) => item.ruleId === 'MSB003'), false);
+  workspace.write('Legacy.sln', source.replace(`{${GUID_APP}}.Debug`, `{${GUID_LIB}}.Debug`));
   assert.ok(diagnosticIds(await scan(sln)).has('MSB003'));
 });
 

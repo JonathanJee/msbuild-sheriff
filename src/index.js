@@ -42,7 +42,7 @@ export async function scan(inputPath, options = {}) {
     }
   }
   for (const project of projects.values()) await projectRules(project, root, diagnostics, null);
-  for (const solution of solutions) await solutionRules(solution, projects, diagnostics);
+  for (const solution of solutions) await solutionRules(solution, projects, root, diagnostics);
   const contexts = new Map();
   for (const solution of solutions) for (const member of solution.memberPaths) (contexts.get(member) ?? contexts.set(member, []).get(member)).push(solution);
   const contextQueue = [], scheduledContexts = new Set();
@@ -65,7 +65,6 @@ export async function scan(inputPath, options = {}) {
     }
     await referenceRules(project, projects, root, diagnostics, solution, enqueueContext);
   }
-  duplicateGuids(projects, diagnostics);
   const scannedFiles = [...new Set([...slns, ...[...projects.values()].map((project) => project.file)])].sort(cmp);
   return { diagnostics: unique(diagnostics).filter((d) => RANK[d.severity] >= RANK[threshold]).sort(compareDiagnostics), scannedFiles };
 }
@@ -112,16 +111,20 @@ async function parseProject(file) {
     .flatMap((e) => list(e.attributes.Include).map((include) => ({ include, guid: guid(child(e, 'Project', source)), condition: condition(e), line: line(source, e.offset) })));
   const items = elements.filter((e) => TYPES.has(e.name) && e.attributes.Include).map((e) => ({ type: e.name, include: e.attributes.Include, condition: condition(e), line: line(source, e.offset) }));
   const imports = elements.filter((e) => e.name === 'Import' && e.attributes.Project).map((e) => ({ project: e.attributes.Project, condition: condition(e), line: line(source, e.offset) }));
-  const configurations = new Set(elements.filter((e) => e.name === 'ProjectConfiguration' && e.attributes.Include).map((e) => configuration(e.attributes.Include)));
+  const { configurations, conditional: conditionalConfigurations } = configurationDeclarations(elements);
   const pathTexts = elements.filter((e) => PATH_ELEMENTS.has(e.name)).map((e) => ({ name: e.name, text: e.text(source), line: line(source, e.offset) }));
-  return { file, source, guids, references, items, imports, configurations, pathTexts };
+  return { file, source, guids, references, items, imports, configurations, conditionalConfigurations, pathTexts };
 }
 
 async function parseSolution(file) {
-  const source = await readLocal(file), members = [], mappings = [];
-  for (const match of source.matchAll(/^Project\("[^"\r\n]+"\)\s*=\s*"[^"]*",\s*"([^"]+\.vcxproj)",\s*"(\{[^}]+\})"/gim)) members.push({ raw: match[1], guid: guid(match[2]), line: line(source, match.index) });
+  const source = await readLocal(file), members = [], declaredMembers = [], mappings = [];
+  for (const match of source.matchAll(/^Project\("[^"\r\n]+"\)\s*=\s*"[^"]*",\s*"([^"]+)",\s*"(\{[^}]+\})"/gim)) {
+    const member = { raw: match[1], guid: guid(match[2]), line: line(source, match.index) };
+    declaredMembers.push(member);
+    if (/\.vcxproj$/i.test(member.raw)) members.push(member);
+  }
   for (const match of source.matchAll(/^\s*(\{[^}]+\})\.([^=]+?)\.(ActiveCfg|Build\.0|Deploy\.0)\s*=\s*(.+?)\s*$/gim)) mappings.push({ guid: guid(match[1]), solutionConfiguration: configuration(match[2]), projectConfiguration: configuration(match[4]), line: line(source, match.index) });
-  return { file, source, members, mappings };
+  return { file, source, members, declaredMembers, mappings };
 }
 
 async function resolveMembers(solution, root, diagnostics) {
@@ -176,25 +179,62 @@ async function importRules(project, root, diagnostics, solutionFile) {
   }
 }
 
-function duplicateGuids(projects, diagnostics) {
-  const owners = new Map();
-  for (const project of projects.values()) for (const value of new Set(project.guids.map((g) => g.guid))) (owners.get(value) ?? owners.set(value, []).get(value)).push(project);
-  for (const [value, same] of owners) if (same.length > 1) for (const project of same) for (const entry of project.guids.filter((g) => g.guid === value)) add(diagnostics, 'MSB001', 'error', `ProjectGuid ${value} is also declared by another project.`, project.file, entry.line);
-}
-
-async function solutionRules(solution, projects, diagnostics) {
-  const byGuid = new Map();
+async function solutionRules(solution, projects, root, diagnostics) {
+  const declaredByGuid = new Map(), byGuid = new Map(), projectOwners = new Map(), evidence = new Map();
+  for (const member of solution.declaredMembers) {
+    (declaredByGuid.get(member.guid) ?? declaredByGuid.set(member.guid, []).get(member.guid)).push(member);
+  }
+  for (const [value, same] of declaredByGuid) if (value && same.length > 1) for (const member of same) add(diagnostics, 'MSB001', 'error', `ProjectGuid ${value} is assigned to multiple solution members.`, solution.file, member.line);
   for (const member of solution.members) {
     (byGuid.get(member.guid) ?? byGuid.set(member.guid, []).get(member.guid)).push(member);
     if (!member.path) continue;
     const project = projects.get(normPath(member.path));
+    if (project) for (const value of new Set(project.guids.map((g) => g.guid))) (projectOwners.get(value) ?? projectOwners.set(value, new Map()).get(value)).set(normPath(project.file), project);
     if (project?.guids.length && !project.guids.some((g) => g.guid === member.guid)) add(diagnostics, 'MSB002', 'error', `Solution project GUID ${member.guid} does not match target ProjectGuid ${project.guids[0].guid}.`, solution.file, member.line);
   }
+  for (const [value, owners] of projectOwners) if (value && owners.size > 1 && (declaredByGuid.get(value)?.length ?? 0) < 2) for (const project of owners.values()) for (const entry of project.guids.filter((g) => g.guid === value)) add(diagnostics, 'MSB001', 'error', `ProjectGuid ${value} is also declared by another member of this solution.`, project.file, entry.line);
   for (const mapping of solution.mappings) {
+    const declared = declaredByGuid.get(mapping.guid);
+    if (!declared?.length) { add(diagnostics, 'MSB003', 'error', `Solution configuration mapping references stale project GUID ${mapping.guid}.`, solution.file, mapping.line); continue; }
+    if (declared.length > 1) continue;
     const members = byGuid.get(mapping.guid);
-    if (!members?.length) { add(diagnostics, 'MSB003', 'error', `Solution configuration mapping references stale project GUID ${mapping.guid}.`, solution.file, mapping.line); continue; }
-    for (const member of members) { const project = member.path && projects.get(normPath(member.path)); if (project && !project.configurations.has(mapping.projectConfiguration)) add(diagnostics, 'MSB003', 'error', `Solution mapping ${mapping.solutionConfiguration} selects missing project configuration ${mapping.projectConfiguration}.`, solution.file, mapping.line); }
+    for (const member of members ?? []) {
+      const project = member.path && projects.get(normPath(member.path));
+      if (!project) continue;
+      const key = normPath(project.file);
+      if (!evidence.has(key)) evidence.set(key, configurationEvidence(project, solution.file, root));
+      const { configurations, complete } = await evidence.get(key);
+      if (complete && !configurations.has(mapping.projectConfiguration)) add(diagnostics, 'MSB003', 'error', `Solution mapping ${mapping.solutionConfiguration} selects missing project configuration ${mapping.projectConfiguration}.`, solution.file, mapping.line);
+    }
   }
+}
+
+function configurationDeclarations(elements) {
+  const configurations = new Set();
+  let conditional = false;
+  for (const element of elements) {
+    if (element.name !== 'ProjectConfiguration' || !element.attributes.Include) continue;
+    if (condition(element)) conditional = true;
+    else configurations.add(configuration(element.attributes.Include));
+  }
+  return { configurations, conditional };
+}
+
+async function configurationEvidence(project, solutionFile, root) {
+  const configurations = new Set(project.configurations);
+  let complete = !project.conditionalConfigurations;
+  for (const entry of project.imports) {
+    if (entry.condition || glob(entry.project)) { complete = false; continue; }
+    const result = resolve(entry.project, project.file, solutionFile, root);
+    if (result.status !== 'resolved' || (await probe(root, result.path)).status !== 'exists') { complete = false; continue; }
+    try {
+      const elements = tokenize(await readLocal(result.path));
+      const declarations = configurationDeclarations(elements);
+      for (const value of declarations.configurations) configurations.add(value);
+      if (declarations.conditional || elements.some((e) => e.name === 'Import')) complete = false;
+    } catch { complete = false; }
+  }
+  return { configurations, complete };
 }
 
 async function referenceRules(project, projects, root, diagnostics, solution, enqueueContext) {

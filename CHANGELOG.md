@@ -4,6 +4,14 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-13
+
+### Fixed
+
+- Limit duplicate project GUID errors to members of the same solution, while retaining checks for repeated declarations within one project.
+- Recognize legacy and other unsupported solution members so their configuration mappings are not mistaken for stale GUIDs.
+- Inspect safely resolved local imports for project configurations and avoid guessing when imports or conditions leave the configuration set uncertain.
+
 ## [0.2.0] - 2026-10-03
 
 ### Added

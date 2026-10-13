@@ -36,7 +36,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: JonathanJee/msbuild-sheriff@v0.2.0
+      - uses: JonathanJee/msbuild-sheriff@v0.2.1
         with:
           path: path/to/Legacy.sln
           severity: warning
@@ -58,9 +58,9 @@ The command exits with `0` when no diagnostic at the selected threshold is found
 
 | Rule | Default severity | What it catches |
 | --- | --- | --- |
-| `MSB001` | error | Missing or duplicate `ProjectGuid` values |
+| `MSB001` | error | Missing or repeated `ProjectGuid` values in a project, or a GUID assigned to multiple members of one solution |
 | `MSB002` | error | Broken `ProjectReference` targets, mismatched GUIDs, or referenced projects absent from the solution |
-| `MSB003` | error | Solution configuration mappings that do not exist in the target project |
+| `MSB003` | error | Solution configuration mappings absent from the target project and safely inspectable imports |
 | `MSB004` | error | Missing unconditional `.props` or `.targets` imports when the path can be resolved safely |
 | `MSB005` | error | Missing `ClCompile`, `ClInclude`, or `ResourceCompile` files |
 | `MSB006` | warning | Machine-specific absolute paths or paths escaping the scan root |
