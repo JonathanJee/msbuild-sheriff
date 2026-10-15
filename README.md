@@ -11,12 +11,21 @@ Catch broken Visual C++ and MSBuild project metadata before an expensive build s
 
 ## Quick start
 
-From a source checkout:
+From a source checkout with Node.js 20 or newer, try the deliberately broken example first (expected exit status `1`):
 
 ```sh
-npm test
+node src/cli.js scan examples/missing-source.vcxproj
+```
+
+Then scan your own project or solution:
+
+```sh
 node src/cli.js scan path/to/Legacy.sln
 ```
+
+The first command runs a [small synthetic example](examples/README.md): it reports `MSB005` for a deliberately missing C++ source file. Replace the second path with your own project or solution. No dependency installation or compiler is needed for either scan. Run `npm test` when developing the scanner itself.
+
+For compatibility evidence from public repositories, see the [dated validation report](docs/validation-2026-10-13.md). Those scans are maintainer tests, not independent usage.
 
 After the package is published:
 
@@ -86,7 +95,7 @@ node src/cli.js scan Legacy.sln --format sarif > msbuild-sheriff.sarif
 
 MSBuild files are programs. Loading them with the full MSBuild engine can import files, expand environment-dependent properties, and run custom tasks during later build phases. This project deliberately performs conservative static parsing instead:
 
-- it never builds, imports, evaluates, or executes a project;
+- it never runs MSBuild, evaluates project logic, or executes imported files;
 - it resolves only literal paths and the local `$(ProjectDir)` and `$(SolutionDir)` properties;
 - it skips existence checks when an unknown property or condition makes the result uncertain;
 - it never modifies project files.
